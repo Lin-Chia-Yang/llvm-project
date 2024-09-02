@@ -749,8 +749,31 @@ private:
                       << (TripCount0 == TripCount1 ? "identical" : "different")
                       << "\n");
 
-    if (TripCount0 == TripCount1)
+    if (TripCount0 == TripCount1){
       return {true, 0};
+    }
+    else{
+      LLVM_DEBUG(dbgs() << "Check the tripcount again\n");
+      unsigned L0count = 0;
+      unsigned L1count = 0;
+      bool L0isConst = false;
+      bool L1isConst = false;
+      if(auto *SCEV0 = llvm::dyn_cast<llvm::SCEVConstant>(TripCount0)){
+        L0count = SCEV0->getAPInt().getZExtValue();
+        L0isConst = true;
+      }
+      if(auto *SCEV1 = llvm::dyn_cast<llvm::SCEVConstant>(TripCount1)){
+        L1count = SCEV1->getAPInt().getZExtValue();
+        L1isConst = true;
+      }
+      if((L0count == L1count) && (L0isConst && L1isConst)){
+        LLVM_DEBUG(dbgs() << "\tTrip counts: " << L0count << " & "
+                      << L1count << " are "
+                      << (L0count == L1count ? "identical" : "different")
+                      << "\n");
+        return {true, 0};
+      }
+    }
 
     LLVM_DEBUG(dbgs() << "The loops do not have the same tripcount, "
                          "determining the difference between trip counts\n");
@@ -1517,7 +1540,7 @@ private:
     else
       return (FC1.GuardBranch->getSuccessor(1) == FC1.Preheader);
   }
-
+  
   /// Modify the latch branch of FC to be unconditional since successors of the
   /// branch are the same.
   void simplifyLatchBranch(const FusionCandidate &FC) const {
