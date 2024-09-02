@@ -91,6 +91,7 @@
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/LoopDistribute.h"
 #include "llvm/Transforms/Scalar/LoopFlatten.h"
+#include "llvm/Transforms/Scalar/LoopFuse.h"
 #include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
 #include "llvm/Transforms/Scalar/LoopInstSimplify.h"
 #include "llvm/Transforms/Scalar/LoopInterchange.h"
@@ -127,6 +128,9 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include "llvm/Transforms/Utils/CodeMotion.h"
+#include "llvm/Transforms/Utils/IndexUnification.h"
+#include "llvm/Transforms/Utils/PeelLoop.h"
 
 using namespace llvm;
 
@@ -279,6 +283,15 @@ static cl::opt<AttributorRunOption> AttributorRun(
                clEnumValN(AttributorRunOption::NONE, "none",
                           "disable attributor runs")));
 
+static cl::opt<bool> EnableCodeMotion("enable-code-motion", cl::init(false), cl::Hidden,
+                 cl::desc("Enable code-motion"));
+static cl::opt<bool> EnableLoopPeeling("enable-loop-peeling", cl::init(false), cl::Hidden,
+                 cl::desc("Enable loop-peeling")); 
+static cl::opt<bool> EnableIndexUnification("enable-index-unification", cl::init(false), cl::Hidden,
+                 cl::desc("Enable index-unification"));                 
+static cl::opt<bool> EnableLoopFusion("enable-loop-fusion", cl::init(false), cl::Hidden,
+                 cl::desc("Enable loop-fusion"));
+
 PipelineTuningOptions::PipelineTuningOptions() {
   LoopInterleaving = true;
   LoopVectorization = true;
@@ -321,7 +334,6 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
                                                    ThinOrFullLTOPhase Phase) {
 
   FunctionPassManager FPM;
-
   // Form SSA out of local memory accesses after breaking apart aggregates into
   // scalars.
   FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
@@ -471,7 +483,6 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
     return buildO1FunctionSimplificationPipeline(Level, Phase);
 
   FunctionPassManager FPM;
-
   // Form SSA out of local memory accesses after breaking apart aggregates into
   // scalars.
   FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
@@ -955,6 +966,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // Create an early function pass manager to cleanup the output of the
   // frontend.
   FunctionPassManager EarlyFPM;
+
   // Lower llvm.expect to metadata before attempting transforms.
   // Compare/branch metadata may alter the behavior of passes like SimplifyCFG.
   EarlyFPM.addPass(LowerExpectIntrinsicPass());
@@ -1400,6 +1412,29 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
          "Must request optimizations for the default pipeline!");
 
   ModulePassManager MPM;
+  // MPM.addPass(createModuleToFunctionPassAdaptor(PromotePass()));
+  // MPM.addPass(createModuleToFunctionPassAdaptor(InstCombinePass()));
+  if(EnableLoopFusion){
+    MPM.addPass(createModuleToFunctionPassAdaptor(PromotePass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(InstCombinePass()));
+    if(EnableCodeMotion){
+      MPM.addPass(createModuleToFunctionPassAdaptor(CodeMotionPass()));
+    }
+    if(EnableLoopPeeling){
+      MPM.addPass(createModuleToFunctionPassAdaptor(PeelLoopPass()));
+    }
+    MPM.addPass(createModuleToFunctionPassAdaptor(
+      createFunctionToLoopPassAdaptor(
+        LoopRotatePass(),
+        /*UseMemorySSA=*/false,
+        /*UseBlockFrequencyInfo=*/false,
+        /*UseBranchProbabilityInfo=*/false)));
+    MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(LoopFusePass()));
+    if(EnableIndexUnification){
+      MPM.addPass(createModuleToFunctionPassAdaptor(IndexUnificationPass()));
+    }
+  }
 
   // Convert @llvm.global.annotations to !annotation metadata.
   MPM.addPass(Annotation2MetadataPass());
@@ -1865,7 +1900,7 @@ ModulePassManager PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
          "buildO0DefaultPipeline should only be used with O0");
 
   ModulePassManager MPM;
-
+  
   // Perform pseudo probe instrumentation in O0 mode. This is for the
   // consistency between different build modes. For example, a LTO build can be
   // mixed with an O0 prelink and an O2 postlink. Loading a sample profile in

@@ -256,6 +256,9 @@
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
 #include <optional>
+#include "llvm/Transforms/Utils/CodeMotion.h"
+#include "llvm/Transforms/Utils/IndexUnification.h"
+#include "llvm/Transforms/Utils/PeelLoop.h"
 
 using namespace llvm;
 
